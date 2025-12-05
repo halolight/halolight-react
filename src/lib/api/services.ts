@@ -85,14 +85,14 @@ async function request<T>(
     }
   }
 
-  const axiosResponse = await apiClient.request<T>({
+  const axiosResponse = await apiClient.request({
     url: endpoint,
     method,
     data: requestData,
-    headers: options.headers,
+    headers: options.headers as Record<string, string> | undefined,
   })
 
-  return axiosResponse.data
+  return axiosResponse.data as T
 }
 
 // 用户相关 API
