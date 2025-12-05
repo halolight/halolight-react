@@ -1,4 +1,15 @@
 // API 服务基础配置
+import apiClient, { authApi } from "./client"
+import {
+  adaptBackendUserList,
+  adaptBackendRoles,
+  adaptBackendUser,
+} from "./adapters"
+import type {
+  BackendUserListResponse,
+  BackendRoleListResponse,
+  BackendUser,
+} from "./backend-types"
 import type {
   Activity,
   CalendarEvent,
@@ -26,7 +37,10 @@ import type {
   VisitData,
 } from "./types"
 
-const API_BASE = import.meta.env.VITE_API_URL || "/api"
+const IS_MOCK_MODE = import.meta.env.VITE_MOCK === "true"
+const API_BASE = IS_MOCK_MODE
+  ? "/api"
+  : import.meta.env.VITE_API_URL || "http://localhost:3000/api"
 
 // 通用请求封装
 async function request<T>(
@@ -34,65 +48,131 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`
+  const method = (options.method || "GET") as string
 
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    ...options,
-  })
+  if (IS_MOCK_MODE) {
+    // Mock 模式使用原有 fetch 逻辑
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+      ...options,
+    })
 
-  const data = await response.json()
+    const data = await response.json()
 
-  if (data.code !== 200) {
-    throw new Error(data.message || "请求失败")
+    if (data.code !== 200) {
+      throw new Error(data.message || "请求失败")
+    }
+
+    return data.data
   }
 
-  return data.data
+  // 真实 API 模式使用 apiClient（自动附带 Authorization 头和 Token 刷新）
+  let requestData: unknown = undefined
+
+  if (options.body) {
+    if (options.body instanceof FormData) {
+      requestData = options.body
+    } else if (typeof options.body === "string") {
+      try {
+        requestData = JSON.parse(options.body)
+      } catch {
+        requestData = options.body
+      }
+    } else {
+      requestData = options.body
+    }
+  }
+
+  const axiosResponse = await apiClient.request<T>({
+    url: endpoint,
+    method,
+    data: requestData,
+    headers: options.headers,
+  })
+
+  return axiosResponse.data
 }
 
 // 用户相关 API
 export const userService = {
   // 获取用户列表
-  getUsers: (params?: { page?: number; pageSize?: number; keyword?: string }) => {
+  getUsers: async (params?: {
+    page?: number
+    pageSize?: number
+    keyword?: string
+  }): Promise<ListData<User>> => {
     const query = new URLSearchParams(params as Record<string, string>).toString()
-    return request<ListData<User>>(`/users${query ? `?${query}` : ""}`)
+
+    if (IS_MOCK_MODE) {
+      return request<ListData<User>>(`/users${query ? `?${query}` : ""}`)
+    }
+
+    // 真实 API 模式使用适配器
+    const response = await apiClient.get<BackendUserListResponse>(
+      `/users${query ? `?${query}` : ""}`
+    )
+    return adaptBackendUserList(response.data)
   },
 
   // 获取单个用户
-  getUser: (id: string) => request<User>(`/users/${id}`),
+  getUser: async (id: string): Promise<User> => {
+    if (IS_MOCK_MODE) {
+      return request<User>(`/users/${id}`)
+    }
+
+    const response = await apiClient.get<BackendUser>(`/users/${id}`)
+    return adaptBackendUser(response.data)
+  },
 
   // 创建用户
-  createUser: (data: Partial<User>) =>
-    request<User>("/users", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+  createUser: async (data: Partial<User>): Promise<User> => {
+    if (IS_MOCK_MODE) {
+      return request<User>("/users", {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    }
+
+    const response = await apiClient.post<BackendUser>("/users", data)
+    return adaptBackendUser(response.data)
+  },
 
   // 更新用户
-  updateUser: (id: string, data: Partial<User>) =>
-    request<User>(`/users/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+  updateUser: async (id: string, data: Partial<User>): Promise<User> => {
+    if (IS_MOCK_MODE) {
+      return request<User>(`/users/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      })
+    }
+
+    const response = await apiClient.put<BackendUser>(`/users/${id}`, data)
+    return adaptBackendUser(response.data)
+  },
 
   // 删除用户
   deleteUser: (id: string) =>
     request<void>(`/users/${id}`, { method: "DELETE" }),
 
-  // 登录
+  // 登录（使用 authApi）
   login: (email: string, password: string) =>
-    request<LoginResponse>("/user/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
+    authApi.login({ email, password }),
 
-  // 获取当前用户
-  getCurrentUser: () => request<User>("/user/current"),
+  // 获取当前用户（使用 authApi）
+  getCurrentUser: () => authApi.getCurrentUser(),
 
   // 获取角色列表
-  getRoles: () => request<Role[]>("/roles"),
+  getRoles: async (): Promise<Role[]> => {
+    if (IS_MOCK_MODE) {
+      return request<Role[]>("/roles")
+    }
+
+    const response = await apiClient.get<BackendRoleListResponse>("/roles")
+    return adaptBackendRoles(response.data)
+  },
 }
 
 // 仪表盘相关 API

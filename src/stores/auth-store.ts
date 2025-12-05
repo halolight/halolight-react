@@ -52,11 +52,20 @@ export const useAuthStore = create<AuthState>()(
         try {
           const response = await authApi.login(data)
 
-          Cookies.set("token", response.token, cookieOptions(data.remember ? 7 : 1))
+          // authApi.login 已设置对应的 cookie:
+          // - Mock 模式: 设置 "token" cookie
+          // - 真实模式: 设置 "accessToken" 和 "refreshToken" cookies
+          // 这里 state.token 在两种模式下都存储主 token 值(Mock 为 token, 真实为 accessToken)
+          const IS_MOCK = import.meta.env.VITE_MOCK === "true"
+          if (IS_MOCK) {
+            // Mock 模式需要额外设置 token cookie (authApi 已设置,这里为兼容保留)
+            Cookies.set("token", response.token, cookieOptions(data.remember ? 7 : 1))
+          }
+          // 真实模式下 authApi.login 已设置 accessToken + refreshToken,无需重复
 
           set({
             user: response.user,
-            token: response.token,
+            token: response.token, // 存储主 token 值用于状态管理
             accounts: response.accounts,
             activeAccountId: response.user.id,
             isAuthenticated: true,
@@ -76,7 +85,12 @@ export const useAuthStore = create<AuthState>()(
         try {
           const response = await authApi.register(data)
 
-          Cookies.set("token", response.token, cookieOptions())
+          // authApi.register 已设置对应的 cookie
+          const IS_MOCK = import.meta.env.VITE_MOCK === "true"
+          if (IS_MOCK) {
+            Cookies.set("token", response.token, cookieOptions())
+          }
+          // 真实模式下已在 authApi.register 中设置 accessToken + refreshToken
 
           set({
             user: response.user,
@@ -100,7 +114,10 @@ export const useAuthStore = create<AuthState>()(
         try {
           await authApi.logout()
         } finally {
+          // 清理所有可能的 token cookies
           Cookies.remove("token")
+          Cookies.remove("accessToken")
+          Cookies.remove("refreshToken")
           set({
             user: null,
             token: null,
@@ -113,12 +130,22 @@ export const useAuthStore = create<AuthState>()(
       },
 
       switchAccount: async (accountId: string) => {
+        const IS_MOCK = import.meta.env.VITE_MOCK === "true"
+
+        // 真实模式下不支持多账号切换
+        if (!IS_MOCK) {
+          const error = "真实模式下暂不支持多账号切换,需要后端 API 支持"
+          set({ error })
+          throw new Error(error)
+        }
+
         const account = get().accounts.find((item) => item.id === accountId)
         if (!account) {
           set({ error: "账号不存在" })
           throw new Error("账号不存在")
         }
 
+        // Mock 模式下切换账号
         Cookies.set("token", account.token, cookieOptions(7))
         set({
           user: account,
@@ -130,6 +157,14 @@ export const useAuthStore = create<AuthState>()(
       },
 
       loadAccounts: async () => {
+        const IS_MOCK = import.meta.env.VITE_MOCK === "true"
+
+        // 真实模式下不支持多账号,跳过
+        if (!IS_MOCK) {
+          set({ isLoading: false })
+          return
+        }
+
         set({ isLoading: true })
         try {
           const accounts = await authApi.getAccounts()
@@ -191,7 +226,9 @@ export const useAuthStore = create<AuthState>()(
       },
 
       checkAuth: async () => {
-        const token = Cookies.get("token")
+        // 优先从 accessToken 读取（真实模式），回退到 token（Mock 模式）
+        const IS_MOCK = import.meta.env.VITE_MOCK === "true"
+        const token = Cookies.get(IS_MOCK ? "token" : "accessToken") || Cookies.get("token")
         const { accounts } = get()
 
         if (!token) {
@@ -205,6 +242,7 @@ export const useAuthStore = create<AuthState>()(
           return
         }
 
+        // 尝试从缓存账号恢复（减少网络请求）
         const cachedAccount = accounts.find((acc) => acc.token === token)
         if (cachedAccount) {
           set({
@@ -217,6 +255,7 @@ export const useAuthStore = create<AuthState>()(
           return
         }
 
+        // 缓存未命中，调用 getCurrentUser 获取最新用户信息
         set({ isLoading: true })
         try {
           const response = await authApi.getCurrentUser()
@@ -230,7 +269,10 @@ export const useAuthStore = create<AuthState>()(
               isLoading: false,
             })
           } else {
+            // 清理所有 token cookies
             Cookies.remove("token")
+            Cookies.remove("accessToken")
+            Cookies.remove("refreshToken")
             set({
               isAuthenticated: false,
               user: null,
@@ -241,7 +283,10 @@ export const useAuthStore = create<AuthState>()(
             })
           }
         } catch {
+          // 清理所有 token cookies
           Cookies.remove("token")
+          Cookies.remove("accessToken")
+          Cookies.remove("refreshToken")
           set({
             isAuthenticated: false,
             user: null,
