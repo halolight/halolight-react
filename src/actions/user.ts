@@ -22,7 +22,7 @@ export interface UserFormData {
   name: string
   email: string
   roleId?: string
-  status?: "active" | "inactive" | "suspended"
+  status?: "ACTIVE" | "INACTIVE" | "SUSPENDED"
   avatar?: string
   phone?: string
   department?: string
@@ -261,7 +261,7 @@ export async function batchDeleteUsersAction(
  */
 export async function updateUserStatusAction(
   id: string,
-  status: "active" | "inactive" | "suspended"
+  status: "ACTIVE" | "INACTIVE" | "SUSPENDED"
 ): Promise<ActionResult<User>> {
   try {
     const user = await clientFetch<User>(`/users/${id}/status`, {
